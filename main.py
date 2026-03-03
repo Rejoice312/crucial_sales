@@ -70,14 +70,14 @@ def plot_sales_summary(agg, start, end):
     fig.add_trace(go.Scatter(
         x = df.period,
         y = df.sales,
-        #mode = 'lines', 
+        mode = 'lines', 
         name = 'Sales'
     ))
 
     fig.add_trace(go.Scatter(
         x = df.period,
         y = df.sale_profit,
-        #mode = 'lines', 
+        mode = 'lines', 
         name = 'Profit'
     ))
 
@@ -167,13 +167,17 @@ def regional_perf(start, end):
 def calc_metrics(start, end):
     is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
     the_txns = txns[is_in_time_frame]
-    sales = the_txns[the_txns.category == 'sales'].amount.sum()
+    sales_df = the_txns[the_txns.category == 'sales']
+    purchases_df = the_txns[the_txns.category == 'purchases']
+    
+    sales = sales_df.amount.sum()
     exp = the_txns[the_txns.type == 'debit'].amount.sum()
     income = the_txns[the_txns.type == 'credit'].amount.sum()
     profit = income - exp
-    purchases = the_txns[the_txns.category == 'purchases'].amount.sum()
-    sale_returns = sales - purchases
+    purchases = purchases_df.amount.sum()
     qty_sold = the_txns[the_txns.category == 'sales'].item_id.count()
+    cost_of_sold_items = purchases_df[purchases_df.item_id.isin(sales_df.item_id)].amount.sum()
+    sale_returns = sales - cost_of_sold_items
     
     stock = display_inventory()
     stock_qty = stock.item_id.count()
@@ -203,6 +207,7 @@ def calc_metrics(start, end):
         'out_of_stock': out_of_stock,
         'customer_count': customer_count,
         'regions': regions,
+        'cost_of_sold_items': cost_of_sold_items
     }
 
     
@@ -233,7 +238,7 @@ with sales_tab:
     # Metrics
     cols = st.columns(4)
     cols[0].metric('Sales', metrics['sales'], border = True)
-    cols[1].metric('Purchases', metrics['purchases'], border = True)
+    cols[1].metric('Items Cost', metrics['cost_of_sold_items'], border = True)
     cols[2].metric('Sale Returns', metrics['sale_returns'], border = True)
     cols[3].metric('Items sold', metrics['qty_sold'], border = True)
 

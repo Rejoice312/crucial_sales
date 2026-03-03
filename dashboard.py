@@ -70,14 +70,14 @@ def plot_sales_summary(agg, start, end):
     fig.add_trace(go.Scatter(
         x = df.period,
         y = df.sales,
-        #mode = 'lines', 
+        mode = 'lines', 
         name = 'Sales'
     ))
 
     fig.add_trace(go.Scatter(
         x = df.period,
         y = df.sale_profit,
-        #mode = 'lines', 
+        mode = 'lines', 
         name = 'Profit'
     ))
 
@@ -164,6 +164,52 @@ def regional_perf(start, end):
     result = result.sort_values(by = ['value', 'purchases', 'customers'], ascending = False)
     return result
 
+def calc_metrics(start, end):
+    is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
+    the_txns = txns[is_in_time_frame]
+    sales_df = the_txns[the_txns.category == 'sales']
+    purchases_df = the_txns[the_txns.category == 'purchases']
+    
+    sales = sales_df.amount.sum()
+    exp = the_txns[the_txns.type == 'debit'].amount.sum()
+    income = the_txns[the_txns.type == 'credit'].amount.sum()
+    profit = income - exp
+    purchases = purchases_df.amount.sum()
+    qty_sold = the_txns[the_txns.category == 'sales'].item_id.count()
+    cost_of_sold_items = purchases_df[purchases_df.item_id.isin(sales_df.item_id)].amount.sum()
+    sale_returns = sales - cost_of_sold_items
+    
+    stock = display_inventory()
+    stock_qty = stock.item_id.count()
+    stock_value = stock.sell_price.sum()
+    stock_categories = stock.category.nunique()
+    item_categories = items.category.nunique()
+    out_of_stock = item_categories - stock_categories
+
+
+    customers = persons[persons.role == 'customer']
+    customer_count = customers.person_id.count()
+    regions = customers.addr.nunique()
+
+
+
+    return {
+        'sales': sales,
+        'exp': exp,
+        'income': income,
+        'profit': profit,
+        'sale_returns': sale_returns,
+        'purchases': purchases,
+        'qty_sold': qty_sold,
+        'stock_qty': stock_qty,
+        'stock_value': stock_value,
+        'stock_categories': stock_categories,
+        'out_of_stock': out_of_stock,
+        'customer_count': customer_count,
+        'regions': regions,
+        'cost_of_sold_items': cost_of_sold_items
+    }
+
     
 
 #--- MAIN CODE ---
@@ -180,6 +226,8 @@ period_end = col2.date_input(
     value = 'today'
     )
 
+# Metrics
+metrics = calc_metrics(period_start, period_end)
 
 sales_tab, inventory_tab, cus_tab, pnl= st.tabs(['Sales', 'Inventory', 'Customer Insights', 'Profit and Loss'])
 
@@ -187,6 +235,13 @@ sales_tab, inventory_tab, cus_tab, pnl= st.tabs(['Sales', 'Inventory', 'Customer
 
 
 with sales_tab:
+    # Metrics
+    cols = st.columns(4)
+    cols[0].metric('Sales', metrics['sales'], border = True)
+    cols[1].metric('Items Cost', metrics['cost_of_sold_items'], border = True)
+    cols[2].metric('Sale Returns', metrics['sale_returns'], border = True)
+    cols[3].metric('Items sold', metrics['qty_sold'], border = True)
+
     # sales summary table
     agg = st.selectbox(
         'Summarize:',
@@ -208,7 +263,7 @@ with sales_tab:
         )
 
     # sales and profit chart
-    plot_sales_summary(agg, period_start, period_end)
+    st.plotly_chart(plot_sales_summary(agg, period_start, period_end))
 
     # product performance table
     st.subheader('Product Performance')
@@ -224,6 +279,13 @@ with sales_tab:
 
 
 with inventory_tab:
+    # Metrics
+    cols = st.columns(4)
+    cols[0].metric('Stock Quantity', metrics['stock_qty'], border = True)
+    cols[1].metric('Stock Value', metrics['stock_value'], border = True)
+    cols[2].metric('Stock Categories', metrics['stock_categories'], border = True)
+    cols[3].metric('Out of Stock', metrics['out_of_stock'], border = True)
+
     st.subheader('Inventory Summary')
     st.dataframe(inventory_summary(), hide_index = True)
 
@@ -236,6 +298,11 @@ with inventory_tab:
 
 
 with cus_tab:
+    # Metrics
+    cols = st.columns(4)
+    cols[1].metric('Customers', metrics['customer_count'], border = True)
+    cols[2].metric('Regions', metrics['regions'], border = True)
+
     st.subheader('Customer Performance')
     st.dataframe(
         customer_perf(period_start, period_end),
@@ -247,4 +314,8 @@ with cus_tab:
 
 
 with pnl:
-    pass
+    # Metrics
+    cols = st.columns(3)
+    cols[0].metric('Income', metrics['income'], border = True)
+    cols[1].metric('Expenses', metrics['exp'], border = True)
+    cols[2].metric('Profit', metrics['profit'], border = True)
