@@ -10,22 +10,18 @@ def load_data():
     Loads the datasets
     Returns a tuple of clean datasets for transactions, persons and items
     '''
-    data = pd.read_excel('data.xlsx', sheet_name = None)
-    items = data['Items']
+    data = pd.read_excel('data2.xlsx', sheet_name = None)
     txns = data['Transactions']
-    persons = data['Persons']
+    persons= data['Persons']
 
     # Data cleaning
-    txns = txns.fillna(pd.NA)
-    txns['person_id'] = txns.person_id.astype(pd.Int64Dtype())
     persons = persons.fillna(pd.NA)
     persons['phone'] = '0' + persons.phone.astype(pd.Int64Dtype()).astype(pd.StringDtype())
 
+    return txns, persons
 
-    return txns, persons, items
 
-
-txns, persons, items = load_data()
+txns, persons = load_data()
 
 is_sale = txns.category == 'sales'
 is_purchase = txns.category == 'purchases'
@@ -33,38 +29,26 @@ today = pd.Timestamp.now()
 
 
 
-def summarize_sales(agg, start, end):
-    is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
-    summary = txns[is_sale & is_in_time_frame].merge(
-        txns[is_purchase], 
-        on = 'item_id', 
-        how = 'left',
-        suffixes = ('_sale', '_purchase')
-        )
-    
+def summarize_sales(agg):
+    summary = txns[is_sale  & is_in_time_frame]
+
     if agg == 'Daily':
-        grouper = summary.date_sale.dt.to_period('D')
+        grouper = summary.date.dt.to_period('D')
     elif agg == 'Weekly':
-        grouper = summary.date_sale.dt.to_period('W')
+        grouper = summary.date.dt.to_period('W')
     else:
-        grouper = summary.date_sale.dt.to_period('M')
+        grouper = summary.date.dt.to_period('M')
 
-
-    summary['sale_profit'] = summary.amount_sale - summary.amount_purchase
     summary = summary.groupby(grouper).agg(
-        sales = ('amount_sale', 'sum'),
-        cost = ('amount_purchase', 'sum'),
-        sale_profit = ('sale_profit', 'sum'),
-        items_sold = ('item_id', 'count')     
-    )
-    summary = summary.reset_index().rename({'date_sale': 'date'}, axis = 1)
-    summary = summary.rename({'date': 'period'}, axis = 1)
+        sales = ('amount', 'sum'),
+        items_sold = ('qty', 'sum')
+    ).reset_index().rename({'date': 'period'}, axis = 1)
 
     return summary
 
 
-def plot_sales_summary(agg, start, end):
-    df = summarize_sales(agg, start, end)
+def plot_sales_summary(agg):
+    df = summarize_sales(agg)
     df['period'] = df.period.dt.to_timestamp()
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -74,78 +58,59 @@ def plot_sales_summary(agg, start, end):
         name = 'Sales'
     ))
 
-    fig.add_trace(go.Scatter(
-        x = df.period,
-        y = df.sale_profit,
-        mode = 'lines', 
-        name = 'Profit'
-    ))
+    fig.update_layout(
+        yaxis = {
+            'range': [0, None]
+        }
+    )
 
     return fig
 
 
-def product_performance_table(start, end):
-    is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
-
-    result = txns[is_sale & is_in_time_frame].merge(items, on = 'item_id', how = 'left', suffixes = ['_txns', '_items'])
-    result = result.groupby('category_items').agg(
+def product_performance_table():
+    result = txns[is_sale & is_in_time_frame].groupby('item_category').agg(
         sales = ('amount', 'sum'),
-        qty_sold = ('item_id', 'count')
-    ).sort_values(by = ['sales', 'qty_sold'], ascending = False).reset_index()
-    result = result.rename({'category_items': 'category'}, axis = 1)
-    
+        qty_sold = ('qty', 'sum')
+    ).reset_index().sort_values(by = 'sales')
+
     return result
 
 
-def product_performance_chart(start, end):
-    df = product_performance_table(start, end)
+def product_performance_chart():
+    df = product_performance_table()
     fig = px.bar(
         data_frame = df,
-        x = 'category',
+        x = 'item_category',
         y = 'sales',
         title = 'Product Performance'
     )
     return fig
 
 
-def display_inventory():
-    inv = items[~items.item_id.isin(txns[is_sale].item_id)]
-    inv = inv.merge(txns[is_purchase][['item_id', 'amount', 'date']], on = 'item_id', how = 'left')
-    inv = inv.rename({
-        'amount': 'cost',
-        'date': 'purchase_date'
-    }, axis = 1)
-
-    return inv
+def inventory():
+    inv = (txns[is_purchase].groupby('item_category').qty.sum() -
+           txns[is_sale].groupby('item_category').qty.sum()).reset_index().set_index('item_category')
+    inv['qty_bought'] = txns[is_purchase].groupby('item_category').qty.sum()
+    inv = inv.rename({'qty': 'qty_in_stock'}, axis = 1)
+    return inv.reset_index().sort_values(by = 'qty_in_stock')
 
 
-def inventory_summary():
-    df = display_inventory()
-    df = df.groupby('category').agg(
-        qty = ('item_id', 'count'),
-        cost = ('cost', 'sum'),
-        estimated_sale = ('sell_price', 'sum')
-    ).reset_index().sort_values(by = 'qty')
-    return df
-
-
-def inventory_summary_chart():
-    df = inventory_summary()
+def inventory_chart():
+    df = inventory()
     fig = px.bar(
         data_frame = df,
-        x = 'category',
-        y = 'qty',
-        title = 'Inventory Summary'
+        x = 'item_category',
+        y = 'qty_in_stock',
+        title = 'Items in Stock'
     )
     return fig
 
 
 def customer_perf(start, end):
-    is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
     result = persons[persons.role == 'customer'].merge(txns[is_sale & is_in_time_frame], on = 'person_id', how = 'left')
     result = result.groupby('person_id').agg(
         value = ('amount', 'sum'),
-        purchases = ('item_id', 'count')
+        purchases = ('qty', 'sum')
     ).reset_index().sort_values(['value', 'purchases'], ascending = False)
     result['name'] = result.person_id.map(persons.set_index('person_id').name)
     result['phone'] = result.person_id.map(persons.set_index('person_id').phone)
@@ -154,13 +119,13 @@ def customer_perf(start, end):
 
 
 def regional_perf(start, end):
-    is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
     result = persons[persons.role == 'customer'].merge(txns[is_sale  & is_in_time_frame], on = 'person_id', how = 'left')
     result = result.groupby('addr').agg(
     value = ('amount', 'sum'),
-    purchases = ('item_id', 'count'),
-    customers = ('person_id', 'count')
+    purchases = ('qty', 'sum'),
+    customers = ('person_id', 'nunique')
     ).reset_index()
+    result = result.rename({'addr': 'region'}, axis = 1)
     result = result.sort_values(by = ['value', 'purchases', 'customers'], ascending = False)
     return result
 
@@ -175,17 +140,10 @@ def calc_metrics(start, end):
     income = the_txns[the_txns.type == 'credit'].amount.sum()
     profit = income - exp
     purchases = purchases_df.amount.sum()
-    qty_sold = the_txns[the_txns.category == 'sales'].item_id.count()
-    cost_of_sold_items = purchases_df[purchases_df.item_id.isin(sales_df.item_id)].amount.sum()
-    sale_returns = sales - cost_of_sold_items
+    qty_sold = the_txns[the_txns.category == 'sales'].qty.sum().astype(int)
     
-    stock = display_inventory()
-    stock_qty = stock.item_id.count()
-    stock_value = stock.sell_price.sum()
-    stock_categories = stock.category.nunique()
-    item_categories = items.category.nunique()
-    out_of_stock = item_categories - stock_categories
-
+    stock = inventory()
+    stock_qty = stock.qty_in_stock.sum().astype(int)
 
     customers = persons[persons.role == 'customer']
     customer_count = customers.person_id.count()
@@ -198,16 +156,11 @@ def calc_metrics(start, end):
         'exp': exp,
         'income': income,
         'profit': profit,
-        'sale_returns': sale_returns,
         'purchases': purchases,
         'qty_sold': qty_sold,
         'stock_qty': stock_qty,
-        'stock_value': stock_value,
-        'stock_categories': stock_categories,
-        'out_of_stock': out_of_stock,
         'customer_count': customer_count,
         'regions': regions,
-        'cost_of_sold_items': cost_of_sold_items
     }
 
     
@@ -225,6 +178,7 @@ period_end = col2.date_input(
     'Period End',
     value = 'today'
     )
+is_in_time_frame = (txns.date.dt.date >= period_start) & (txns.date.dt.date <= period_end)
 
 # Metrics
 metrics = calc_metrics(period_start, period_end)
@@ -237,10 +191,8 @@ sales_tab, inventory_tab, cus_tab, pnl= st.tabs(['Sales', 'Inventory', 'Customer
 with sales_tab:
     # Metrics
     cols = st.columns(4)
-    cols[0].metric('Sales', metrics['sales'], border = True)
-    cols[1].metric('Items Cost', metrics['cost_of_sold_items'], border = True)
-    cols[2].metric('Sale Returns', metrics['sale_returns'], border = True)
-    cols[3].metric('Items sold', metrics['qty_sold'], border = True)
+    cols[1].metric('Sales', metrics['sales'], border = True)
+    cols[2].metric('Items sold', metrics['qty_sold'], border = True)
 
     # sales summary table
     agg = st.selectbox(
@@ -258,41 +210,35 @@ with sales_tab:
     
     st.subheader(subheader)
     st.dataframe(
-        summarize_sales(agg, period_start, period_end), 
+        summarize_sales(agg), 
         hide_index = True
         )
 
     # sales and profit chart
-    st.plotly_chart(plot_sales_summary(agg, period_start, period_end))
+    st.plotly_chart(plot_sales_summary(agg))
 
     # product performance table
     st.subheader('Product Performance')
     st.dataframe(
-        product_performance_table(period_start, period_end), 
+        product_performance_table(), 
         hide_index = True
         )
 
     # item peprformance chart
-    st.plotly_chart(product_performance_chart(period_start, period_end))
+    st.plotly_chart(product_performance_chart())
 
 
 
 
 with inventory_tab:
     # Metrics
-    cols = st.columns(4)
-    cols[0].metric('Stock Quantity', metrics['stock_qty'], border = True)
-    cols[1].metric('Stock Value', metrics['stock_value'], border = True)
-    cols[2].metric('Stock Categories', metrics['stock_categories'], border = True)
-    cols[3].metric('Out of Stock', metrics['out_of_stock'], border = True)
-
-    st.subheader('Inventory Summary')
-    st.dataframe(inventory_summary(), hide_index = True)
-
-    st.plotly_chart(inventory_summary_chart())
+    cols = st.columns(5)
+    cols[2].metric('Stock Quantity', metrics['stock_qty'], border = True)
 
     st.subheader('Items in Stock')
-    st.dataframe(display_inventory(), hide_index = True)
+    st.dataframe(inventory(), hide_index = True)
+
+    st.plotly_chart(inventory_chart())
 
 
 
