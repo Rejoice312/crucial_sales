@@ -249,14 +249,6 @@ def plot_balance(agg):
     )
     return fig
 
-def expenses_history():
-    exp = txns[is_in_time_frame & (txns.type == 'debit')]
-    exp = exp.groupby(['date', 'category']).amount.sum()
-    exp.loc['Total'] = exp.sum(numeric_only = True)
-    exp = exp.reset_index(name = 'expenses')
-    return exp
-
-
     
 
 #--- MAIN CODE ---
@@ -369,6 +361,3 @@ with pnl:
     st.plotly_chart(plot_balance(agg))
     st.plotly_chart(plot_profit(by = 'item_category'))
     st.plotly_chart(plot_profit(by = 'customers'))
-
-    # Expenses
-    st.dataframe(expenses_history(), hide_index = True)
