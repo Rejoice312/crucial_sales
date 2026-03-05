@@ -54,6 +54,10 @@ def plot_sales_summary(agg):
         data_frame = df,
         x = 'period',
         y = 'sales',
+        labels = {
+            'period': 'Period',
+            'sales': 'Sales (NGN)'
+        },
         markers = True
     )
 
@@ -75,7 +79,11 @@ def product_performance_chart():
         data_frame = df,
         x = 'item_category',
         y = 'sales',
-        title = 'Product Performance'
+        title = 'Product Performance',
+        labels = {
+            'sales': 'Sales (NGN)',
+            'item_category': 'Clothings'
+        }
     )
     return fig
 
@@ -128,9 +136,13 @@ def calc_metrics():
     purchases_df = the_txns[the_txns.category == 'purchases']
     
     sales = sales_df.amount.sum()
+    capital = txns[txns.category == 'capital'].amount.sum()
+    capital = capital if capital else 0
     exp = the_txns[the_txns.type == 'debit'].amount.sum()
-    income = the_txns[the_txns.type == 'credit'].amount.sum()
+    income = the_txns[the_txns.type == 'credit'].amount.sum() - capital
     profit = income - exp
+    
+    balance = capital + profit
     purchases = purchases_df.amount.sum()
     qty_sold = the_txns[the_txns.category == 'sales'].qty.sum().astype(int)
     
@@ -153,39 +165,96 @@ def calc_metrics():
         'stock_qty': stock_qty,
         'customer_count': customer_count,
         'regions': regions,
+        'balance': balance,
+        'capital': capital
     }
 
     
-def get_profit(agg):
-    profits = (txns[is_in_time_frame & (txns.type == 'credit')].groupby('date').amount.sum()
-               .sub(txns[is_in_time_frame & (txns.type == 'debit')].groupby('date').amount.sum(), fill_value = 0)
+def get_profit(by = 'item_category'):
+    if by == 'item_category':
+        profits = (txns[is_in_time_frame & is_sale].groupby('item_category').amount.sum()
+               .sub(txns[is_in_time_frame & is_purchase].groupby('item_category').amount.sum(), fill_value = 0)
                .reset_index(name = 'profit'))
-    if agg == 'Daily':
-        grouper = profits.date.dt.to_period('D')
-    elif agg == 'Weekly':
-        grouper = profits.date.dt.to_period('W')
-    else:
-        grouper = profits.date.dt.to_period('M')
-
-    profits = profits.groupby(grouper).profit.sum().reset_index(name = 'profit')
-    profits = profits.rename({'date': 'period'}, axis = 1)
-    profits['cum_profit'] = profits.profit.cumsum()
-    return profits
-
-def plot_profit(agg):
-    profit = get_profit(agg)
-    profit = profit.set_index('period').resample('D').sum()
-    profit.index = profit.index.to_timestamp()
-    profit = profit.reset_index('period')
+        return profits
     
-    fig = px.line(
-        data_frame = profit,
-        x = 'period',
-        y = 'cum_profit',
-        markers = True
-    )
+    elif by == 'customers':
+        profits = (txns[is_in_time_frame & is_sale].groupby('person_id').amount.sum()
+               .sub(txns[is_in_time_frame & is_purchase].groupby('person_id').amount.sum(), fill_value = 0)
+               .reset_index(name = 'profit'))
+        profits['customer_name'] = (profits.person_id
+                                    .map(persons.set_index('person_id').name))
+        return profits
+    
+    else:
+        raise Exception('by got an invalid value. valid values are: "item_category", "customers"')
+
+def plot_profit(by = None):
+    if by == 'item_category':
+        profit = get_profit(by= 'item_category')
+        fig = px.pie(
+            data_frame = profit,
+            names = 'item_category',
+            values = 'profit',
+            title = 'Profit Distribution Across Products',
+
+        )
+
+    elif by == 'customers':
+        profit = get_profit(by= 'customers')
+        fig = px.pie(
+            data_frame = profit,
+            names = 'customer_name',
+            values = 'profit',
+            title = 'Profit Distribution Across customers',
+
+        )
+
+    else:
+        raise Exception('invalid value for parameter "by"')
 
     return fig
+
+def balance_history(agg):
+    balance_df = (txns[is_in_time_frame & (txns.type == 'credit')].groupby('date').amount.sum()
+                .sub(txns[is_in_time_frame & (txns.type == 'debit')].groupby('date').amount.sum(), fill_value = 0)
+                .to_frame(name = 'balance_chg'))
+    if agg == 'Daily':
+        resampler = 'D'
+    elif agg == 'Weekly':
+        resampler = 'W'
+    else:
+        resampler = 'M'
+
+    balance_df = balance_df.resample(resampler).sum()
+    balance_df.index.name = 'period'
+    balance_df = balance_df.sort_index()
+    balance_df['balance'] = balance_df.balance_chg.cumsum()
+    return balance_df
+
+def plot_balance(agg):
+    balance = balance_history(agg)
+    #balance.index = balance.index.to_timestamp()
+    balance = balance.reset_index('period')
+    
+    fig = px.line(
+        data_frame = balance,
+        x = 'period',
+        y = 'balance',
+        markers = True,
+        title = 'Balance Growth',
+        labels = {
+            'cum_profit': 'Balance',
+            'period': 'Period'
+        }
+    )
+    return fig
+
+def expenses_history():
+    exp = txns[is_in_time_frame & (txns.type == 'debit')]
+    exp = exp.groupby(['date', 'category']).amount.sum()
+    exp.loc['Total'] = exp.sum(numeric_only = True)
+    exp = exp.reset_index(name = 'expenses')
+    return exp
 
 
     
@@ -203,6 +272,11 @@ period_end = col2.date_input(
     'Period End',
     value = 'today'
     )
+agg = st.selectbox(
+        'Summarize:',
+        options = ['Daily', 'Weekly', 'Monthly'],
+        width = 200
+        )
 is_in_time_frame = (txns.date.dt.date >= period_start) & (txns.date.dt.date <= period_end)
 
 # Metrics
@@ -220,11 +294,6 @@ with sales_tab:
     cols[2].metric('Items sold', metrics['qty_sold'], border = True)
 
     # sales summary table
-    agg = st.selectbox(
-        'Summarize:',
-        options = ['Daily', 'Weekly', 'Monthly'],
-        width = 200
-        )
     subheader = 'Sales Summary'
     if agg == 'Daily':
         subheader = f'Daily {subheader}'
@@ -257,8 +326,8 @@ with sales_tab:
 
 with inventory_tab:
     # Metrics
-    cols = st.columns(5)
-    cols[2].metric('Stock Quantity', metrics['stock_qty'], border = True)
+    cols = st.columns(3)
+    cols[1].metric('Stock Quantity', metrics['stock_qty'], border = True)
 
     st.subheader('Items in Stock')
     st.dataframe(inventory(), hide_index = True)
@@ -291,6 +360,15 @@ with pnl:
     cols[1].metric('Expenses', metrics['exp'], border = True)
     cols[2].metric('Profit', metrics['profit'], border = True)
 
+    cols = st.columns(4)
+    cols[1].metric('Capital', metrics['capital'], border = True)
+    cols[2].metric('Balance', metrics['balance'], border = True)
+    
+
     # PNL Chart
-    st.dataframe(get_profit(agg))
-    st.plotly_chart(plot_profit(agg))
+    st.plotly_chart(plot_balance(agg))
+    st.plotly_chart(plot_profit(by = 'item_category'))
+    st.plotly_chart(plot_profit(by = 'customers'))
+
+    # Expenses
+    st.dataframe(expenses_history(), hide_index = True)
