@@ -4,13 +4,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
-@st.cache_data
 def load_data():
     '''
     Loads the datasets
     Returns a tuple of clean datasets for transactions, persons and items
     '''
-    data = pd.read_excel('data2.xlsx', sheet_name = None)
+    data = pd.read_excel('data.xlsx', sheet_name = None)
     txns = data['Transactions']
     persons= data['Persons']
 
@@ -249,6 +248,18 @@ def plot_balance(agg):
     )
     return fig
 
+
+def save_data(file_name, **data):
+    with pd.ExcelWriter('old_data.xlsx') as writer:
+        txns.to_excel(writer, sheet_name = 'Transactions', index = False)
+        persons.to_excel(writer, sheet_name = 'Persons', index = False)
+
+    with pd.ExcelWriter(file_name) as writer:
+        for key in data:
+            data[key].to_excel(writer, sheet_name = key, index = False)
+
+    
+
     
 
 #--- MAIN CODE ---
@@ -274,7 +285,12 @@ is_in_time_frame = (txns.date.dt.date >= period_start) & (txns.date.dt.date <= p
 # Metrics
 metrics = calc_metrics()
 
-sales_tab, inventory_tab, cus_tab, pnl= st.tabs(['Sales', 'Inventory', 'Customer Insights', 'Profit and Loss'])
+sales_tab, inventory_tab, cus_tab, pnl_tab, data_tab= st.tabs([
+    'Sales', 'Inventory', 
+    'Customer Insights', 
+    'Profit and Loss', 
+    'Data'
+    ])
 
 
 
@@ -345,7 +361,7 @@ with cus_tab:
     st.dataframe(regional_perf())
 
 
-with pnl:
+with pnl_tab:
     # Metrics
     cols = st.columns(3)
     cols[0].metric('Income', metrics['income'], border = True)
@@ -361,3 +377,26 @@ with pnl:
     st.plotly_chart(plot_balance(agg))
     st.plotly_chart(plot_profit(by = 'item_category'))
     st.plotly_chart(plot_profit(by = 'customers'))
+
+
+with data_tab:
+    txns_tab, persons_tab = st.tabs(['Transactions', 'Persons'])
+
+    with txns_tab:
+        edited_txns = st.data_editor(
+            txns,
+            num_rows = 'dynamic'
+            )
+        
+    with persons_tab:
+        edited_persons = st.data_editor(
+            persons, 
+            num_rows = 'dynamic'
+        )
+    
+    if st.button('Save Data'):
+        save_data(
+            'data.xlsx',
+            Tansactions = edited_txns, 
+            Persons = edited_persons
+            )   
