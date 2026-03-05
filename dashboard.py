@@ -381,6 +381,8 @@ with pnl_tab:
 
 with data_tab:
     txns_tab, persons_tab = st.tabs(['Transactions', 'Persons'])
+    txns['date'] = txns.date.dt.date
+    persons['cus_date'] = persons.cus_date.dt.date
 
     with txns_tab:
         edited_txns = st.data_editor(
