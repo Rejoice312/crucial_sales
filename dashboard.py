@@ -50,18 +50,11 @@ def summarize_sales(agg):
 def plot_sales_summary(agg):
     df = summarize_sales(agg)
     df['period'] = df.period.dt.to_timestamp()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x = df.period,
-        y = df.sales,
-        mode = 'lines', 
-        name = 'Sales'
-    ))
-
-    fig.update_layout(
-        yaxis = {
-            'range': [0, None]
-        }
+    fig = px.line(
+        data_frame = df,
+        x = 'period',
+        y = 'sales',
+        markers = True
     )
 
     return fig
@@ -106,7 +99,7 @@ def inventory_chart():
     return fig
 
 
-def customer_perf(start, end):
+def customer_perf():
     result = persons[persons.role == 'customer'].merge(txns[is_sale & is_in_time_frame], on = 'person_id', how = 'left')
     result = result.groupby('person_id').agg(
         value = ('amount', 'sum'),
@@ -118,7 +111,7 @@ def customer_perf(start, end):
     return result[['name', 'phone', 'value', 'purchases']]
 
 
-def regional_perf(start, end):
+def regional_perf():
     result = persons[persons.role == 'customer'].merge(txns[is_sale  & is_in_time_frame], on = 'person_id', how = 'left')
     result = result.groupby('addr').agg(
     value = ('amount', 'sum'),
@@ -129,8 +122,7 @@ def regional_perf(start, end):
     result = result.sort_values(by = ['value', 'purchases', 'customers'], ascending = False)
     return result
 
-def calc_metrics(start, end):
-    is_in_time_frame = (txns.date.dt.date >= start) & (txns.date.dt.date <= end)
+def calc_metrics():
     the_txns = txns[is_in_time_frame]
     sales_df = the_txns[the_txns.category == 'sales']
     purchases_df = the_txns[the_txns.category == 'purchases']
@@ -164,6 +156,39 @@ def calc_metrics(start, end):
     }
 
     
+def get_profit(agg):
+    profits = (txns[is_in_time_frame & (txns.type == 'credit')].groupby('date').amount.sum()
+               .sub(txns[is_in_time_frame & (txns.type == 'debit')].groupby('date').amount.sum(), fill_value = 0)
+               .reset_index(name = 'profit'))
+    if agg == 'Daily':
+        grouper = profits.date.dt.to_period('D')
+    elif agg == 'Weekly':
+        grouper = profits.date.dt.to_period('W')
+    else:
+        grouper = profits.date.dt.to_period('M')
+
+    profits = profits.groupby(grouper).profit.sum().reset_index(name = 'profit')
+    profits = profits.rename({'date': 'period'}, axis = 1)
+    profits['cum_profit'] = profits.profit.cumsum()
+    return profits
+
+def plot_profit(agg):
+    profit = get_profit(agg)
+    profit = profit.set_index('period').resample('D').sum()
+    profit.index = profit.index.to_timestamp()
+    profit = profit.reset_index('period')
+    
+    fig = px.line(
+        data_frame = profit,
+        x = 'period',
+        y = 'cum_profit',
+        markers = True
+    )
+
+    return fig
+
+
+    
 
 #--- MAIN CODE ---
 if __name__ == '__main__':
@@ -181,7 +206,7 @@ period_end = col2.date_input(
 is_in_time_frame = (txns.date.dt.date >= period_start) & (txns.date.dt.date <= period_end)
 
 # Metrics
-metrics = calc_metrics(period_start, period_end)
+metrics = calc_metrics()
 
 sales_tab, inventory_tab, cus_tab, pnl= st.tabs(['Sales', 'Inventory', 'Customer Insights', 'Profit and Loss'])
 
@@ -251,12 +276,12 @@ with cus_tab:
 
     st.subheader('Customer Performance')
     st.dataframe(
-        customer_perf(period_start, period_end),
+        customer_perf(),
         hide_index = True
         )
     
     st.subheader('Regional Performance')
-    st.dataframe(regional_perf(period_start, period_end))
+    st.dataframe(regional_perf())
 
 
 with pnl:
@@ -265,3 +290,7 @@ with pnl:
     cols[0].metric('Income', metrics['income'], border = True)
     cols[1].metric('Expenses', metrics['exp'], border = True)
     cols[2].metric('Profit', metrics['profit'], border = True)
+
+    # PNL Chart
+    st.dataframe(get_profit(agg))
+    st.plotly_chart(plot_profit(agg))
