@@ -399,6 +399,6 @@ with data_tab:
     if st.button('Save Data'):
         save_data(
             'data.xlsx',
-            Tansactions = edited_txns, 
+            Transactions = edited_txns, 
             Persons = edited_persons
             )   
