@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from time import sleep
 
 
 def load_data():
@@ -25,6 +26,7 @@ txns, persons = load_data()
 is_sale = txns.category == 'sales'
 is_purchase = txns.category == 'purchases'
 today = pd.Timestamp.now()
+SECRET_CODE = 'crucial fish'
 
 
 
@@ -42,25 +44,9 @@ def summarize_sales(agg):
         sales = ('amount', 'sum'),
         items_sold = ('qty', 'sum')
     ).reset_index().rename({'date': 'period'}, axis = 1)
+    summary['period'] = summary.period.dt.to_timestamp(how = 'end')
 
     return summary
-
-
-def plot_sales_summary(agg):
-    df = summarize_sales(agg)
-    df['period'] = df.period.dt.to_timestamp()
-    fig = px.line(
-        data_frame = df,
-        x = 'period',
-        y = 'sales',
-        labels = {
-            'period': 'Period',
-            'sales': 'Sales (NGN)'
-        },
-        markers = True
-    )
-
-    return fig
 
 
 def product_performance_table():
@@ -72,38 +58,12 @@ def product_performance_table():
     return result
 
 
-def product_performance_chart():
-    df = product_performance_table()
-    fig = px.bar(
-        data_frame = df,
-        x = 'item_category',
-        y = 'sales',
-        title = 'Product Performance',
-        labels = {
-            'sales': 'Sales (NGN)',
-            'item_category': 'Clothings'
-        }
-    )
-    return fig
-
-
 def inventory():
     inv = (txns[is_purchase].groupby('item_category').qty.sum() -
            txns[is_sale].groupby('item_category').qty.sum()).reset_index().set_index('item_category')
     inv['qty_bought'] = txns[is_purchase].groupby('item_category').qty.sum()
     inv = inv.rename({'qty': 'qty_in_stock'}, axis = 1)
     return inv.reset_index().sort_values(by = 'qty_in_stock')
-
-
-def inventory_chart():
-    df = inventory()
-    fig = px.bar(
-        data_frame = df,
-        x = 'item_category',
-        y = 'qty_in_stock',
-        title = 'Items in Stock'
-    )
-    return fig
 
 
 def customer_perf():
@@ -171,52 +131,23 @@ def calc_metrics():
     
 def get_profit(by = 'item_category'):
     if by == 'item_category':
-        profits = (txns[is_in_time_frame & is_sale].groupby('item_category').amount.sum()
-               .sub(txns[is_in_time_frame & is_purchase].groupby('item_category').amount.sum(), fill_value = 0)
-               .reset_index(name = 'profit'))
-        return profits
-    
-    elif by == 'customers':
-        profits = (txns[is_in_time_frame & is_sale].groupby('person_id').amount.sum()
-               .sub(txns[is_in_time_frame & is_purchase].groupby('person_id').amount.sum(), fill_value = 0)
-               .reset_index(name = 'profit'))
-        profits['customer_name'] = (profits.person_id
-                                    .map(persons.set_index('person_id').name))
-        return profits
-    
-    else:
-        raise Exception('by got an invalid value. valid values are: "item_category", "customers"')
-
-def plot_profit(by = None):
-    if by == 'item_category':
-        profit = get_profit(by= 'item_category')
-        fig = px.pie(
-            data_frame = profit,
-            names = 'item_category',
-            values = 'profit',
-            title = 'Profit Distribution Across Products',
-
+        sales = txns[is_in_time_frame & is_sale].groupby('item_category').amount.sum()
+        sales = sales.to_frame(name = 'sales')
+        costs = txns[is_in_time_frame & is_purchase].groupby('item_category').agg(
+            cost = ('amount', 'sum'),
+            qty = ('qty', 'sum')
         )
+        sales['unit_cost'] = costs.cost/costs.qty
+        sales['qty'] = costs.qty
+        sales['profit'] = sales.sales - (sales.unit_cost * sales.qty)
+        
+        return sales.reset_index().sort_values(by = 'profit', ascending = False)
 
-    elif by == 'customers':
-        profit = get_profit(by= 'customers')
-        fig = px.pie(
-            data_frame = profit,
-            names = 'customer_name',
-            values = 'profit',
-            title = 'Profit Distribution Across customers',
-
-        )
-
-    else:
-        raise Exception('invalid value for parameter "by"')
-
-    return fig
 
 def balance_history(agg):
     balance_df = (txns[is_in_time_frame & (txns.type == 'credit')].groupby('date').amount.sum()
                 .sub(txns[is_in_time_frame & (txns.type == 'debit')].groupby('date').amount.sum(), fill_value = 0)
-                .to_frame(name = 'balance_chg'))
+                .reset_index(name = 'balance_chg'))
     if agg == 'Daily':
         resampler = 'D'
     elif agg == 'Weekly':
@@ -224,181 +155,328 @@ def balance_history(agg):
     else:
         resampler = 'M'
 
-    balance_df = balance_df.resample(resampler).sum()
-    balance_df.index.name = 'period'
+    balance_df = balance_df.resample(resampler, on = 'date', kind = 'datetime').sum().reset_index()
     balance_df = balance_df.sort_index()
     balance_df['balance'] = balance_df.balance_chg.cumsum()
     return balance_df
 
-def plot_balance(agg):
-    balance = balance_history(agg)
-    #balance.index = balance.index.to_timestamp()
-    balance = balance.reset_index('period')
-    
-    fig = px.line(
-        data_frame = balance,
-        x = 'period',
-        y = 'balance',
-        markers = True,
-        title = 'Balance Growth',
-        labels = {
-            'cum_profit': 'Balance',
-            'period': 'Period'
-        }
-    )
-    return fig
-
 
 def save_data(file_name, **data):
-    with pd.ExcelWriter('old_data.xlsx') as writer:
-        txns.to_excel(writer, sheet_name = 'Transactions', index = False)
-        persons.to_excel(writer, sheet_name = 'Persons', index = False)
+    try:
+        with pd.ExcelWriter('old_data.xlsx') as writer:
+            txns.to_excel(writer, sheet_name = 'Transactions', index = False)
+            persons.to_excel(writer, sheet_name = 'Persons', index = False)
 
-    with pd.ExcelWriter(file_name) as writer:
-        for key in data:
-            data[key].to_excel(writer, sheet_name = key, index = False)
-
+        with pd.ExcelWriter(file_name) as writer:
+            for key in data:
+                data[key].to_excel(writer, sheet_name = key, index = False)
+        st.session_state.data_saved = True
+    except:
+        pass
     
 
+def show_data_edit_panel(code):
+    if code == SECRET_CODE:
+        st.session_state.show_data_edit_panel = True
+        st.session_state.code = ''
+
+def hide_data_edit_panel():
+    st.session_state.show_data_edit_panel = False
+
+
+def cost_analysis():
+    cost_df = txns[is_in_time_frame & (txns.type == 'debit')]
+    by_cat = cost_df.groupby('category').amount.sum().reset_index(name = 'amount_spent')
+    by_cat = by_cat.sort_values(by = 'amount_spent')
+    daily_cost = cost_df.groupby(['date', 'category']).amount.sum().reset_index(name = 'amount_spent')
+    daily_cost['days_ago'] = (today - daily_cost.date).dt.days
+    most_recent_costs = daily_cost.sort_values(by = 'date', ascending = False)[:7]
+    most_recent_costs['date'] = most_recent_costs.date.dt.date
+    return by_cat, most_recent_costs
     
 
 #--- MAIN CODE ---
 if __name__ == '__main__':
     st.header("Crucial Clothing Store")
 
-col1, col2 = st.columns(2)
-period_start = col1.date_input(
-    'Period Start',
-    value = (today - pd.DateOffset(days = 360))
-    )
-period_end = col2.date_input(
-    'Period End',
-    value = 'today'
-    )
-agg = st.selectbox(
-        'Summarize:',
-        options = ['Daily', 'Weekly', 'Monthly'],
-        width = 200
+    session_state_vars = [
+        'edit_data_clicked',
+        'show_data_edit_panel',
+        'data_saved'
+    ]
+    for session_state_var in session_state_vars:
+        if not session_state_var in st.session_state:
+            st.session_state[session_state_var] = None
+
+    col1, col2 = st.columns(2)
+    period_start = col1.date_input(
+        'Period Start',
+        value = (today - pd.DateOffset(days = 360))
         )
-is_in_time_frame = (txns.date.dt.date >= period_start) & (txns.date.dt.date <= period_end)
-
-# Metrics
-metrics = calc_metrics()
-
-sales_tab, inventory_tab, cus_tab, pnl_tab, data_tab= st.tabs([
-    'Sales', 'Inventory', 
-    'Customer Insights', 
-    'Profit and Loss', 
-    'Data'
-    ])
-
-
-
-
-with sales_tab:
-    # Metrics
-    cols = st.columns(4)
-    cols[1].metric('Sales', metrics['sales'], border = True)
-    cols[2].metric('Items sold', metrics['qty_sold'], border = True)
-
-    # sales summary table
-    subheader = 'Sales Summary'
-    if agg == 'Daily':
-        subheader = f'Daily {subheader}'
-    elif agg == 'Weekly':
-        subheader = f'Weekly {subheader}'
-    elif agg == 'Monthly':
-        subheader = f'Monthly {subheader}'
-    
-    st.subheader(subheader)
-    st.dataframe(
-        summarize_sales(agg), 
-        hide_index = True
+    period_end = col2.date_input(
+        'Period End',
+        value = 'today'
         )
+    agg = st.selectbox(
+            'Summarize:',
+            options = ['Daily', 'Weekly', 'Monthly'],
+            width = 200
+            )
+    is_in_time_frame = (txns.date.dt.date >= period_start) & (txns.date.dt.date <= period_end)
 
-    # sales and profit chart
-    st.plotly_chart(plot_sales_summary(agg))
-
-    # product performance table
-    st.subheader('Product Performance')
-    st.dataframe(
-        product_performance_table(), 
-        hide_index = True
-        )
-
-    # item peprformance chart
-    st.plotly_chart(product_performance_chart())
-
-
-
-
-with inventory_tab:
     # Metrics
-    cols = st.columns(3)
-    cols[1].metric('Stock Quantity', metrics['stock_qty'], border = True)
+    metrics = calc_metrics()
 
-    st.subheader('Items in Stock')
-    st.dataframe(inventory(), hide_index = True)
-
-    st.plotly_chart(inventory_chart())
-
-
-
-
-with cus_tab:
-    # Metrics
-    cols = st.columns(4)
-    cols[1].metric('Customers', metrics['customer_count'], border = True)
-    cols[2].metric('Regions', metrics['regions'], border = True)
-
-    st.subheader('Customer Performance')
-    st.dataframe(
-        customer_perf(),
-        hide_index = True
-        )
-    
-    st.subheader('Regional Performance')
-    st.dataframe(regional_perf())
+    sales_tab, exp_tab, inventory_tab, cus_tab, pnl_tab, data_tab= st.tabs([
+        'Sales', 
+        'Expenses',
+        'Inventory', 
+        'Customer Insights', 
+        'Profit and Loss', 
+        'Data'
+        ])
 
 
-with pnl_tab:
-    # Metrics
-    cols = st.columns(3)
-    cols[0].metric('Income', metrics['income'], border = True)
-    cols[1].metric('Expenses', metrics['exp'], border = True)
-    cols[2].metric('Profit', metrics['profit'], border = True)
-
-    cols = st.columns(4)
-    cols[1].metric('Capital', metrics['capital'], border = True)
-    cols[2].metric('Balance', metrics['balance'], border = True)
-    
-
-    # PNL Chart
-    st.plotly_chart(plot_balance(agg))
-    st.plotly_chart(plot_profit(by = 'item_category'))
-    st.plotly_chart(plot_profit(by = 'customers'))
 
 
-with data_tab:
-    txns_tab, persons_tab = st.tabs(['Transactions', 'Persons'])
-    txns['date'] = txns.date.dt.date
-    persons['cus_date'] = persons.cus_date.dt.date
+    with sales_tab:
+        # Metrics
+        cols = st.columns(4)
+        cols[1].metric('Sales', metrics['sales'], border = True)
+        cols[2].metric('Items sold', metrics['qty_sold'], border = True)
 
-    with txns_tab:
-        edited_txns = st.data_editor(
-            txns,
-            num_rows = 'dynamic'
+        # Sales summary
+        subheader = 'Sales Summary'
+        if agg == 'Daily':
+            subheader = f'Daily {subheader}'
+        elif agg == 'Weekly':
+            subheader = f'Weekly {subheader}'
+        elif agg == 'Monthly':
+            subheader = f'Monthly {subheader}'
+        
+        view_mode = st.selectbox(
+            'View Mode', 
+            ['Sales', 'Items Sold'],
+            width = 150
+            )
+        sales_summary = summarize_sales(agg)
+        
+        y = {}
+        if view_mode == 'Sales':
+            y['name'] = 'sales'
+            y['label'] = 'Sales'
+        else:
+            y['name'] = 'items_sold'
+            y['label'] = 'Items Sold'
+        
+        st.plotly_chart(px.line(
+            data_frame = sales_summary,
+            x = 'period',
+            y = y['name'],
+            labels = {
+                'period': 'Period',
+                y['name']: y['label']
+            },
+            title = subheader,
+            markers = True
+        ))
+        
+
+        # item peprformance chart
+        product_perf = product_performance_table()
+        if view_mode == 'Sales':
+            y['name'] = 'sales'
+            y['label'] = 'Sales'
+        else:
+            y['name'] = 'qty_sold'
+            y['label'] = 'Quantity Sold'
+
+        st.plotly_chart(px.bar(
+            data_frame = product_perf,
+            x = 'item_category',
+            y = y['name'],
+            labels = {
+                'item_category': 'Product Category',
+                y['name']: y['label']
+            },
+            title = 'Product Perfomance'
+        ))
+
+
+
+    with exp_tab:
+        exp_by_cat, latest_exp = cost_analysis()
+        st.dataframe(exp_by_cat, hide_index = True)
+        st.plotly_chart(px.bar(
+            data_frame = exp_by_cat,
+            x = 'category',
+            y = 'amount_spent',
+            labels = {
+                'category': 'Category',
+                'amount_spent': 'Amount Spent'
+            },
+            title = 'Expenses by Category'
+        ))
+        st.dataframe(latest_exp, hide_index = True)
+
+
+
+
+    with inventory_tab:
+        # Metrics
+        cols = st.columns(3)
+        cols[1].metric('Stock Quantity', metrics['stock_qty'], border = True)
+
+        st.subheader('Items in Stock')
+        st.dataframe(inventory(), hide_index = True)
+
+
+
+    with cus_tab:
+        # Metrics
+        cols = st.columns(4)
+        cols[1].metric('Customers', metrics['customer_count'], border = True)
+        cols[2].metric('Regions', metrics['regions'], border = True)
+
+        st.subheader('Customer Performance')
+        st.dataframe(
+            customer_perf(),
+            hide_index = True,
+            column_config = {
+                'name': 'Name',
+                'phone': 'Contact',
+                'value': 'Purchase Value',
+                'purchases': 'Qty Purchased'
+            }
             )
         
-    with persons_tab:
-        edited_persons = st.data_editor(
-            persons, 
-            num_rows = 'dynamic'
-        )
-    
-    if st.button('Save Data'):
-        save_data(
-            'data.xlsx',
-            Transactions = edited_txns, 
-            Persons = edited_persons
-            )   
+        st.subheader('Regional Performance')
+        st.dataframe(
+            regional_perf(),
+            hide_index = True,
+            column_config = {
+                'region': 'Region',
+                'value': 'Sales Made',
+                'purchases': 'Qy Sold',
+                'customers': 'Number of Customers'
+            }
+            )
+
+
+    with pnl_tab:
+        # Metrics
+        cols = st.columns(3)
+        cols[0].metric('Income', metrics['income'], border = True)
+        cols[1].metric('Expenses', metrics['exp'], border = True)
+        cols[2].metric('Profit', metrics['profit'], border = True)
+
+        cols = st.columns(4)
+        cols[1].metric('Capital', metrics['capital'], border = True)
+        cols[2].metric('Balance', metrics['balance'], border = True)
+        
+
+        # PNL Chart
+        bal = balance_history(agg)
+        st.plotly_chart(px.line(
+            data_frame = bal,
+            x = 'date', 
+            y = 'balance', 
+            labels = {
+                'date': 'Date',
+                'balance': 'Balance'
+            },
+            markers = True,
+            title = 'Balance History'
+        ))
+
+        profits_df = get_profit()
+        st.plotly_chart(px.bar(
+            data_frame = profits_df,
+            x = 'item_category',
+            y = 'profit',
+            labels = {
+                'item_category': 'Products',
+                'profit': 'Profit'
+            },
+            title = 'Profit From Already Sold Items'
+        ))
+
+        st.dataframe(
+            profits_df,
+            hide_index = True,
+            column_config = {
+                'item_category': 'Product',
+                'sales': 'Sales',
+                'unit_cost': 'Unit Cost',
+                'qty': 'Qty Sold',
+                'profit': 'Profit'
+            }
+            )
+
+
+    with data_tab:
+        st.text_input(
+            'Enter Password:', 
+            type = 'password',
+            key = 'code'
+            )
+        display = st.empty()
+        st.button(
+            'Edit Data',
+            on_click = show_data_edit_panel,
+            kwargs = {
+                'code': st.session_state.code
+                }
+            )
+
+        if st.session_state.show_data_edit_panel:
+            txns_tab, persons_tab = st.tabs(['Transactions', 'Persons'])
+            txns['date'] = txns.date.dt.date
+            persons['cus_date'] = persons.cus_date.dt.date
+
+            with txns_tab:
+                edited_txns = st.data_editor(
+                    txns,
+                    num_rows = 'dynamic'
+                    )
+                
+            with persons_tab:
+                edited_persons = st.data_editor(
+                    persons, 
+                    num_rows = 'dynamic'
+                )
+            
+            display = st.empty()
+            st.button(
+                'Save Data',
+                on_click = save_data,
+                kwargs = {
+                    'file_name': 'data.xlsx',
+                    'Transactions': edited_txns,
+                    'Persons': edited_persons
+                }
+                )
+            st.button(
+                'Done',
+                on_click = hide_data_edit_panel
+            )
+                
+                
+            if st.session_state.data_saved:
+                st.session_state.data_saved = False
+                display.success('Data Saved Successfully')
+                sleep(1.5)
+                display.empty()
+            else:
+                display.error('An error Occured, Data not Saved!')
+                sleep(1.5)
+                display.empty()
+                st.stop()
+
+            st.session_state.edit_data_clicked = False
+
+        else:
+            display.error('Incorrect Password')
+            sleep(1.5)
+            display.empty()
+            st.stop()
