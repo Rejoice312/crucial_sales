@@ -131,15 +131,16 @@ def calc_metrics():
     
 def get_profit(by = 'item_category'):
     if by == 'item_category':
-        sales = txns[is_in_time_frame & is_sale].groupby('item_category').amount.sum()
-        sales = sales.to_frame(name = 'sales')
+        sales = txns[is_in_time_frame & is_sale].groupby('item_category').agg(
+            sales = ('amount', 'sum'),
+            qty = ('qty', 'sum')
+        )
         costs = txns[is_in_time_frame & is_purchase].groupby('item_category').agg(
             cost = ('amount', 'sum'),
             qty = ('qty', 'sum')
         )
-        sales['unit_cost'] = costs.cost/costs.qty
-        sales['qty'] = costs.qty
-        sales['profit'] = sales.sales - (sales.unit_cost * sales.qty)
+        sales['unit_cost'] = (costs.cost/costs.qty).round()
+        sales['profit'] = (sales.sales - (sales.unit_cost * sales.qty)).round()
         
         return sales.reset_index().sort_values(by = 'profit', ascending = False)
 
@@ -190,7 +191,7 @@ def cost_analysis():
     by_cat = by_cat.sort_values(by = 'amount_spent')
     daily_cost = cost_df.groupby(['date', 'category']).amount.sum().reset_index(name = 'amount_spent')
     daily_cost['days_ago'] = (today - daily_cost.date).dt.days
-    most_recent_costs = daily_cost.sort_values(by = 'date', ascending = False)[:7]
+    most_recent_costs = daily_cost.sort_values(by = 'date', ascending = False)[daily_cost.days_ago < 7]
     most_recent_costs['date'] = most_recent_costs.date.dt.date
     return by_cat, most_recent_costs
     
@@ -306,17 +307,18 @@ if __name__ == '__main__':
 
     with exp_tab:
         exp_by_cat, latest_exp = cost_analysis()
-        st.dataframe(exp_by_cat, hide_index = True)
-        st.plotly_chart(px.bar(
+        st.plotly_chart(px.pie(
             data_frame = exp_by_cat,
-            x = 'category',
-            y = 'amount_spent',
+            names = 'category',
+            values= 'amount_spent',
             labels = {
                 'category': 'Category',
                 'amount_spent': 'Amount Spent'
             },
             title = 'Expenses by Category'
         ))
+
+        st.subheader('Past 7 Days\' Expenses')
         st.dataframe(latest_exp, hide_index = True)
 
 
@@ -375,7 +377,7 @@ if __name__ == '__main__':
         cols[2].metric('Balance', metrics['balance'], border = True)
         
 
-        # PNL Chart
+        # Balance Chart
         bal = balance_history(agg)
         st.plotly_chart(px.line(
             data_frame = bal,
@@ -386,7 +388,8 @@ if __name__ == '__main__':
                 'balance': 'Balance'
             },
             markers = True,
-            title = 'Balance History'
+            title = 'Balance History',
+            range_y = [0, bal.balance.max()]
         ))
 
         profits_df = get_profit()
