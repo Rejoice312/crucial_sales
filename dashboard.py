@@ -15,6 +15,9 @@ def load_data():
     persons= data['Persons']
 
     # Data cleaning
+    txns = txns.fillna(pd.NA)
+    txns['person_id'] = txns.person_id.astype(pd.Int64Dtype())
+    txns['qty'] = txns.qty.astype(pd.Int64Dtype())
     persons = persons.fillna(pd.NA)
     persons['phone'] = '0' + persons.phone.astype(pd.Int64Dtype()).astype(pd.StringDtype())
 
@@ -195,6 +198,7 @@ def cost_analysis():
     most_recent_costs['date'] = most_recent_costs.date.dt.date
     return by_cat, most_recent_costs
     
+     
 
 #--- MAIN CODE ---
 if __name__ == '__main__':
@@ -319,7 +323,16 @@ if __name__ == '__main__':
         ))
 
         st.subheader('Past 7 Days\' Expenses')
-        st.dataframe(latest_exp, hide_index = True)
+        st.dataframe(
+            latest_exp, 
+            hide_index = True,
+            column_config = {
+                'date': 'Date',
+                'category': 'Category',
+                'amount_spent': 'Amount Spent',
+                'days_ago': 'Days Ago'
+            }
+        )
 
 
 
@@ -418,47 +431,90 @@ if __name__ == '__main__':
 
 
     with data_tab:
-        st.text_input(
-            'Enter Password:', 
-            type = 'password',
-            key = 'code'
-            )
-        display = st.empty()
-        st.button(
-            'Edit Data',
-            on_click = show_data_edit_panel,
-            kwargs = {
-                'code': st.session_state.code
-                }
-            )
+        with st.form('password_form'):
+            st.text_input(
+                'Enter Password:', 
+                type = 'password',
+                key = 'code'
+                )
+            display = st.empty()
+            st.form_submit_button(
+                'Edit Data',
+                on_click = show_data_edit_panel,
+                kwargs = {
+                    'code': st.session_state.code
+                    }
+                )
 
         if st.session_state.show_data_edit_panel:
             txns_tab, persons_tab = st.tabs(['Transactions', 'Persons'])
             txns['date'] = txns.date.dt.date
             persons['cus_date'] = persons.cus_date.dt.date
 
-            with txns_tab:
-                edited_txns = st.data_editor(
-                    txns,
-                    num_rows = 'dynamic'
+            with st.form('data_entry'):
+                with txns_tab:
+                    edited_txns = st.data_editor(
+                        txns,
+                        num_rows = 'dynamic',
+                        column_config = {
+                            'txn_id': 'Txn ID',
+                            'date': 'Date',
+                            'category': st.column_config.SelectboxColumn(
+                                'Category',
+                                options = list(txns.category.dropna().unique())
+                                #accept_new_options = True
+                            ),
+                            'amount': 'Amount (NGN)',
+                            'type': st.column_config.SelectboxColumn(
+                                'Type',
+                                options = list(txns.type.dropna().unique()),
+                                #accept_new_options = True
+                            ),
+                            'person_id': 'Person ID',
+                            'item_category': st.column_config.SelectboxColumn(
+                                'Item Category',
+                                options = list(txns.item_category.dropna().unique())
+                            ),
+                            'qty': 'Qty'
+
+                            #'person_id': st.column_config.SelectboxColumn(
+                            #    'person_id',
+                            #    options = persons.name.sort_values().str.cat(persons.phone, sep = '_').str.cat(persons.person_id.astype(pd.StringDtype()), sep = '_').dropna().to_list()
+                            #)
+
+                        }
+                    )
+
+                with persons_tab:
+                    edited_persons = st.data_editor(
+                        persons, 
+                        num_rows = 'dynamic',
+                        column_config = {
+                            'person_id': 'Person ID',
+                            'name': 'Name',
+                            'cus_date': 'Customership Date',
+                            'addr': st.column_config.SelectboxColumn(
+                                'Region',
+                                options = list(persons.addr.dropna().unique())
+                            ),
+                            'phone': 'Phone',
+                            'role': st.column_config.SelectboxColumn(
+                                'Role',
+                                options = list(persons.role.dropna().unique())
+                            ),
+                        }
                     )
                 
-            with persons_tab:
-                edited_persons = st.data_editor(
-                    persons, 
-                    num_rows = 'dynamic'
-                )
-            
-            display = st.empty()
-            st.button(
-                'Save Data',
-                on_click = save_data,
-                kwargs = {
-                    'file_name': 'data.xlsx',
-                    'Transactions': edited_txns,
-                    'Persons': edited_persons
-                }
-                )
+                display = st.empty()
+                st.form_submit_button(
+                    'Save Data',
+                    on_click = save_data,
+                    kwargs = {
+                        'file_name': 'data.xlsx',
+                        'Transactions': edited_txns,
+                        'Persons': edited_persons
+                    }
+                    )
             st.button(
                 'Done',
                 on_click = hide_data_edit_panel
